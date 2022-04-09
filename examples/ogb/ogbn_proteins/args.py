@@ -25,6 +25,7 @@ class ArgsInit(object):
                             help='the file path of extracted node features saved.')
         # training & eval settings
         parser.add_argument('--use_gpu', action='store_true')
+        parser.add_argument('--num-gpus', type=int, default=1)
         parser.add_argument('--device', type=int, default=0,
                             help='which gpu to use if any (default: 0)')
         parser.add_argument('--epochs', type=int, default=1000,

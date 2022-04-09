@@ -91,7 +91,12 @@ class DeeperGCN(torch.nn.Module):
 
         self.node_pred_linear = torch.nn.Linear(hidden_channels, num_tasks)
 
-    def forward(self, x, node_index, edge_index, edge_attr):
+    def forward(self, x, node_index, edge_index, edge_attr, num_nodes, num_edges):
+
+        x = x.squeeze(0)[:num_nodes.item()]
+        node_index = node_index.squeeze(0)[:num_nodes.item()]
+        edge_index = edge_index.squeeze(0)[:, :num_edges.item()]
+        edge_attr = edge_attr.squeeze(0)[:num_edges.item()]
 
         node_features_1st = self.node_features[node_index]
 
