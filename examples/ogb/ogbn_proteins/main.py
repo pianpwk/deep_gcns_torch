@@ -14,6 +14,7 @@ from utils.data_util import intersection, process_indexes
 import logging
 
 from torch_geometric.nn import DataParallel
+from torch_geometric.data import Data
 
 
 def pad_tensors(xs, node_indexs, edge_indexs, edge_attrs):
@@ -24,6 +25,13 @@ def pad_tensors(xs, node_indexs, edge_indexs, edge_attrs):
     edge_indexs = torch.stack([x if x.size(1) == max_edges else torch.cat([x, torch.zeros(2, max_edges - x.size(1), device=edge_indexs[0].device).long()], dim=1) for x in edge_indexs], dim=0) # not zero
     edge_attrs = torch.stack([x if x.size(0) == max_edges else torch.cat([x, torch.zeros(max_edges - x.size(0), 8, device=edge_attrs[0].device)], dim=0) for x in edge_attrs], dim=0)
     return xs, node_indexs, edge_indexs, edge_attrs, torch.LongTensor(num_nodes), torch.LongTensor(num_edges)
+
+
+def create_datalist(x, node_index, edge_index, edge_attr, num_nodes, num_edges):
+    data_list = []
+    for i in range(x.size(0)):
+        data_list.append(Data(x=x[i], node_index=node_index[i], edge_index=edge_index[i], edge_attr=edge_attr[i], num_nodes=num_nodes[i], num_edges=num_edges[i]))
+    return data_list
 
 
 def train(data, dataset, model, optimizer, criterion, num_gpus, device):
@@ -47,14 +55,15 @@ def train(data, dataset, model, optimizer, criterion, num_gpus, device):
 
         x, sg_nodes_idx, sg_edges_, sg_edges_attr, num_nodes, num_edges = pad_tensors(x, sg_nodes_idx, sg_edges_, sg_edges_attr)
 
-        #all_nodes = np.concatenate([sg_nodes[idx] for idx in clusters], axis=0)
-        #mapper = {node: idx for idx, node in enumerate(sg_nodes[idx])}
-        #inter_idx = intersection(all_nodes, dataset.train_idx.tolist())
-        #training_idx = [mapper[t_idx] for t_idx in inter_idx]
+        # create training_idx, assuming cluster partitions are distinct
+        all_nodes = np.concatenate([sg_nodes[idx] for idx in clusters], dim=0)
+        mapper = {node: idx for idx, node in enumerate(all_nodes)}
+        inter_idx = intersection(all_nodes, dataset.train_idx.tolist())
+        training_idx = [mapper[t_idx] for t_idx in inter_idx]
 
         optimizer.zero_grad()
 
-        pred = model(x, sg_nodes_idx, sg_edges_, sg_edges_attr, num_nodes, num_edges)
+        pred = model(data_list)
 
         target = train_y[inter_idx].to(device)
 
