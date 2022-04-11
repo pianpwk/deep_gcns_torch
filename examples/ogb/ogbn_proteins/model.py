@@ -135,6 +135,7 @@ class DeeperGCN(torch.nn.Module):
             h = F.relu(self.layer_norms[self.num_layers-1](h))
             h = F.dropout(h, p=self.dropout, training=self.training)
 
+            print("fwd", h.shape)
             return self.node_pred_linear(h)
 
         elif self.block == 'res':

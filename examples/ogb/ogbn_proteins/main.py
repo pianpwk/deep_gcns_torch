@@ -19,10 +19,10 @@ from torch_geometric.nn import DataParallel
 def pad_tensors(xs, node_indexs, edge_indexs, edge_attrs):
     num_nodes, num_edges = [x.size(0) for x in xs], [x.size(0) for x in edge_attrs]
     max_nodes, max_edges = max(num_nodes), max(num_edges)
-    xs = torch.stack([x if x.size(0) == max_nodes else torch.cat([x, torch.zeros(max_nodes - x.size(0), 8)], dim=0) for x in xs], dim=0)
-    node_indexs = torch.stack([x if x.size(0) == max_nodes else torch.cat([x, torch.zeros(max_nodes - x.size(0)).long()], dim=0) for x in xs], dim=0) # not zero
-    edge_indexs = torch.stack([x if x.size(1) == max_edges else torch.cat([x, torch.zeros(2, max_nodes - x.size(1)).long()], dim=1) for x in xs], dim=0) # not zero
-    edge_attrs = torch.stack([x if x.size(0) == max_edges else torch.cat([x, torch.zeros(max_edges - x.size(0), 8)], dim=0)], dim=0)
+    xs = torch.stack([x if x.size(0) == max_nodes else torch.cat([x, torch.zeros(max_nodes - x.size(0), 8, device=xs[0].device)], dim=0) for x in xs], dim=0)
+    node_indexs = torch.stack([x if x.size(0) == max_nodes else torch.cat([x, torch.zeros(max_nodes - x.size(0), device=node_indexs[0].device).long()], dim=0) for x in node_indexs], dim=0) # not zero
+    edge_indexs = torch.stack([x if x.size(1) == max_edges else torch.cat([x, torch.zeros(2, max_edges - x.size(1), device=edge_indexs[0].device).long()], dim=1) for x in edge_indexs], dim=0) # not zero
+    edge_attrs = torch.stack([x if x.size(0) == max_edges else torch.cat([x, torch.zeros(max_edges - x.size(0), 8, device=edge_attrs[0].device)], dim=0) for x in edge_attrs], dim=0)
     return xs, node_indexs, edge_indexs, edge_attrs, torch.LongTensor(num_nodes), torch.LongTensor(num_edges)
 
 
@@ -36,19 +36,21 @@ def train(data, dataset, model, optimizer, criterion, num_gpus, device):
     idx_clusters = np.arange(len(sg_nodes))
     np.random.shuffle(idx_clusters)
 
+    breakpoint()
+
     for i in range(int(math.ceil(len(idx_clusters) / float(num_gpus)))):
         clusters = idx_clusters[i*num_gpus : (i+1)*num_gpus]
-        x = [dataset.x[sg_nodes[idx].float().to(device)] for idx in clusters]
+        x = [dataset.x[sg_nodes[idx]].float().to(device) for idx in clusters]
         sg_nodes_idx = [torch.LongTensor(sg_nodes[idx]).to(device) for idx in clusters]
         sg_edges_ = [sg_edges[idx].to(device) for idx in clusters]
         sg_edges_attr = [dataset.edge_attr[sg_edges_index[idx]].to(device) for idx in clusters]
 
         x, sg_nodes_idx, sg_edges_, sg_edges_attr, num_nodes, num_edges = pad_tensors(x, sg_nodes_idx, sg_edges_, sg_edges_attr)
 
-        mapper = {node: idx for idx, node in enumerate(sg_nodes[idx])}
-
-        inter_idx = intersection(sg_nodes[idx], dataset.train_idx.tolist())
-        training_idx = [mapper[t_idx] for t_idx in inter_idx]
+        #all_nodes = np.concatenate([sg_nodes[idx] for idx in clusters], axis=0)
+        #mapper = {node: idx for idx, node in enumerate(sg_nodes[idx])}
+        #inter_idx = intersection(all_nodes, dataset.train_idx.tolist())
+        #training_idx = [mapper[t_idx] for t_idx in inter_idx]
 
         optimizer.zero_grad()
 
