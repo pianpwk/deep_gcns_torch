@@ -44,8 +44,6 @@ def train(data, dataset, model, optimizer, criterion, num_gpus, device):
     idx_clusters = np.arange(len(sg_nodes))
     np.random.shuffle(idx_clusters)
 
-    breakpoint()
-
     for i in range(int(math.ceil(len(idx_clusters) / float(num_gpus)))):
         clusters = idx_clusters[i*num_gpus : (i+1)*num_gpus]
         x = [dataset.x[sg_nodes[idx]].float().to(device) for idx in clusters]
@@ -54,9 +52,10 @@ def train(data, dataset, model, optimizer, criterion, num_gpus, device):
         sg_edges_attr = [dataset.edge_attr[sg_edges_index[idx]].to(device) for idx in clusters]
 
         x, sg_nodes_idx, sg_edges_, sg_edges_attr, num_nodes, num_edges = pad_tensors(x, sg_nodes_idx, sg_edges_, sg_edges_attr)
+        data_list = create_datalist(x, sg_nodes_idx, sg_edges_, sg_edges_attr, num_nodes, num_edges)
 
         # create training_idx, assuming cluster partitions are distinct
-        all_nodes = np.concatenate([sg_nodes[idx] for idx in clusters], dim=0)
+        all_nodes = np.concatenate([sg_nodes[idx] for idx in clusters], axis=0)
         mapper = {node: idx for idx, node in enumerate(all_nodes)}
         inter_idx = intersection(all_nodes, dataset.train_idx.tolist())
         training_idx = [mapper[t_idx] for t_idx in inter_idx]
@@ -76,7 +75,7 @@ def train(data, dataset, model, optimizer, criterion, num_gpus, device):
 
 
 @torch.no_grad()
-def multi_evaluate(valid_data_list, dataset, model, evaluator, device):
+def multi_evaluate(valid_data_list, dataset, model, evaluator, num_gpus, device):
     model.eval()
     target = dataset.y.detach().numpy()
 
@@ -101,15 +100,22 @@ def multi_evaluate(valid_data_list, dataset, model, evaluator, device):
         train_target_idx = []
         valid_target_idx = []
 
-        for idx in idx_clusters:
-            x = dataset.x[sg_nodes[idx]].float().to(device)
-            sg_nodes_idx = torch.LongTensor(sg_nodes[idx]).to(device)
+        for i in range(int(math.ceil(len(idx_clusters) / float(num_gpus)))):
+            clusters = idx_clusters[i*num_gpus : (i+1)*num_gpus]
+            x = [dataset.x[sg_nodes[idx]].float().to(device) for idx in clusters]
+            sg_nodes_idx = [torch.LongTensor(sg_nodes[idx]).to(device) for idx in clusters]
+            sg_edges_ = [sg_edges[idx].to(device) for idx in clusters]
+            sg_edges_attr = [dataset.edge_attr[sg_edges_index[idx]].to(device) for idx in clusters]
 
-            mapper = {node: idx for idx, node in enumerate(sg_nodes[idx])}
-            sg_edges_attr = dataset.edge_attr[sg_edges_index[idx]].to(device)
+            x, sg_nodes_idx, sg_edges_, sg_edges_attr, num_nodes, num_edges = pad_tensors(x, sg_nodes_idx, sg_edges_, sg_edges_attr)
+            data_list = create_datalist(x, sg_nodes_idx, sg_edges_, sg_edges_attr, num_nodes, num_edges)
 
-            inter_tr_idx = intersection(sg_nodes[idx], train_idx)
-            inter_v_idx = intersection(sg_nodes[idx], valid_idx)
+            # create training_idx, assuming cluster partitions are distinct
+            all_nodes = np.concatenate([sg_nodes[idx] for idx in clusters], axis=0)
+            mapper = {node: idx for idx, node in enumerate(all_nodes)}
+
+            inter_tr_idx = intersection(all_nodes, train_idx)
+            inter_v_idx = intersection(all_nodes, valid_idx)
 
             train_target_idx += inter_tr_idx
             valid_target_idx += inter_v_idx
@@ -117,12 +123,12 @@ def multi_evaluate(valid_data_list, dataset, model, evaluator, device):
             tr_idx = [mapper[tr_idx] for tr_idx in inter_tr_idx]
             v_idx = [mapper[v_idx] for v_idx in inter_v_idx]
 
-            pred = model(x, sg_nodes_idx, sg_edges[idx].to(device), sg_edges_attr).cpu().detach()
+            pred = model(data_list).cpu().detach()
 
             train_predict.append(pred[tr_idx])
             valid_predict.append(pred[v_idx])
 
-            inter_te_idx = intersection(sg_nodes[idx], test_idx)
+            inter_te_idx = intersection(all_nodes, test_idx)
             test_target_idx += inter_te_idx
 
             te_idx = [mapper[te_idx] for te_idx in inter_te_idx]
@@ -215,9 +221,9 @@ def main():
         epoch_loss = train(data, dataset, model, optimizer, criterion, args.num_gpus, device)
         logging.info('Epoch {}, training loss {:.4f}'.format(epoch, epoch_loss))
 
-        model.print_params(epoch=epoch)
+        model.module.print_params(epoch=epoch)
 
-        result = multi_evaluate(valid_data_list, dataset, model, evaluator, device)
+        result = multi_evaluate(valid_data_list, dataset, model, evaluator, args.num_gpus, device)
 
         if epoch % 5 == 0:
             logging.info('%s' % result)

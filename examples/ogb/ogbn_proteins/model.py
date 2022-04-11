@@ -79,7 +79,9 @@ class DeeperGCN(torch.nn.Module):
             self.gcns.append(gcn)
             self.layer_norms.append(norm_layer(norm, hidden_channels))
 
-        self.node_features = torch.load(node_features_file_path).to(args.device)
+        node_features = torch.load(node_features_file_path)
+        self.node_features = torch.nn.Embedding(node_features.size(0), node_features.size(1))
+        self.node_features.weight.data = node_features
 
         if self.use_one_hot_encoding:
             self.node_one_hot_encoder = torch.nn.Linear(8, 8)
@@ -91,14 +93,21 @@ class DeeperGCN(torch.nn.Module):
 
         self.node_pred_linear = torch.nn.Linear(hidden_channels, num_tasks)
 
-    def forward(self, x, node_index, edge_index, edge_attr, num_nodes, num_edges):
+    def forward(self, data):
 
-        x = x.squeeze(0)[:num_nodes.item()]
-        node_index = node_index.squeeze(0)[:num_nodes.item()]
-        edge_index = edge_index.squeeze(0)[:, :num_edges.item()]
-        edge_attr = edge_attr.squeeze(0)[:num_edges.item()]
+        # get from Data
+        x, node_index, edge_index, edge_attr, num_nodes, num_edges = data.x, data.node_index, data.edge_index, data.edge_attr, data.num_nodes.item(), data.num_edges
+        x = x[:num_nodes]
+        node_index = node_index[:num_nodes]
+        edge_index = edge_index[:, :num_edges]
+        edge_attr = edge_attr[:num_edges]
 
-        node_features_1st = self.node_features[node_index]
+        x = x.squeeze(0)[:num_nodes]
+        node_index = node_index.squeeze(0)[:num_nodes]
+        edge_index = edge_index.squeeze(0)[:, :num_edges]
+        edge_attr = edge_attr.squeeze(0)[:num_edges]
+
+        node_features_1st = self.node_features(node_index)
 
         if self.use_one_hot_encoding:
             node_features_2nd = self.node_one_hot_encoder(x)
@@ -135,7 +144,6 @@ class DeeperGCN(torch.nn.Module):
             h = F.relu(self.layer_norms[self.num_layers-1](h))
             h = F.dropout(h, p=self.dropout, training=self.training)
 
-            print("fwd", h.shape)
             return self.node_pred_linear(h)
 
         elif self.block == 'res':
