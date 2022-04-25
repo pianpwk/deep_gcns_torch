@@ -96,16 +96,7 @@ class DeeperGCN(torch.nn.Module):
     def forward(self, data):
 
         # get from Data
-        x, node_index, edge_index, edge_attr, num_nodes, num_edges = data.x, data.node_index, data.edge_index, data.edge_attr, data.num_nodes.item(), data.num_edges
-        x = x[:num_nodes]
-        node_index = node_index[:num_nodes]
-        edge_index = edge_index[:, :num_edges]
-        edge_attr = edge_attr[:num_edges]
-
-        x = x.squeeze(0)[:num_nodes]
-        node_index = node_index.squeeze(0)[:num_nodes]
-        edge_index = edge_index.squeeze(0)[:, :num_edges]
-        edge_attr = edge_attr.squeeze(0)[:num_edges]
+        x, node_index, edge_index, edge_attr = data.x, data.node_index, data.edge_index, data.edge_attr
 
         node_features_1st = self.node_features(node_index)
 

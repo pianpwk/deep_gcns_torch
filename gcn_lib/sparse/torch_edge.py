@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from torch_cluster import knn_graph
+# from torch_cluster import knn_graph
 
 
 class Dilated(nn.Module):

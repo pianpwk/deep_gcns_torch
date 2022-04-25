@@ -34,6 +34,8 @@ class ArgsInit(object):
                             help='The number of evaluation times')
         parser.add_argument('--lr', type=float, default=0.001,
                             help='learning rate set for optimizer.')
+        parser.add_argument('--warmup-ratio', type=float, default=0.1,
+                            help='learning rate warmup period')
         parser.add_argument('--dropout', type=float, default=0.0)
         # model
         parser.add_argument('--num_layers', type=int, default=3,
