@@ -1,6 +1,7 @@
 import __init__
 import math
 import torch
+import torch.nn as nn
 import torch.optim as optim
 import statistics
 from dataset import OGBNDataset
@@ -12,6 +13,7 @@ from ogb.nodeproppred import Evaluator
 from utils.ckpt_util import save_ckpt
 from utils.data_util import intersection, process_indexes
 import logging
+# import wandb
 
 from torch_geometric.nn import DataParallel
 from torch_geometric.data import Data
@@ -56,7 +58,7 @@ def train(data, dataset, model, optimizer, criterion, scheduler, num_gpus, devic
     train_y = dataset.y[dataset.train_idx]
     idx_clusters = list(np.arange(len(sg_nodes)))
     np.random.shuffle(idx_clusters)
-    idx_clusters = list(idx_clusters) * 2
+#     idx_clusters = list(idx_clusters) * 2
 
     for i in range(int(math.ceil(len(idx_clusters) / float(num_gpus)))):
         clusters = idx_clusters[i*num_gpus : (i+1)*num_gpus]
@@ -85,6 +87,8 @@ def train(data, dataset, model, optimizer, criterion, scheduler, num_gpus, devic
 
         loss = criterion(pred[training_idx].to(torch.float32), target.to(torch.float32))
         loss.backward()
+        nn.utils.clip_grad_value_(model.parameters(), 0.5)
+        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         loss_list.append(loss.item())
 
@@ -182,6 +186,7 @@ def multi_evaluate(valid_data_list, dataset, model, evaluator, num_gpus, device)
 
 def main():
     args = ArgsInit().save_exp()
+    # wandb.init(project='deepgcn')
 
     if args.use_gpu:
         device = torch.device("cuda:" + str(args.device)) if torch.cuda.is_available() else torch.device("cpu")
@@ -219,7 +224,7 @@ def main():
     model = DeeperGCN(args).to(device)
     model = DataParallel(model).cuda()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = GradualScheduler(args.lr, int(args.warmup_ratio * args.cluster_number * 2 * args.epochs))
+    scheduler = GradualScheduler(args.lr, int(args.warmup_ratio * args.cluster_number * args.epochs))
 
     results = {'highest_valid': 0,
                'final_train': 0,
@@ -248,6 +253,8 @@ def main():
         train_result = result['train']['rocauc']
         valid_result = result['valid']['rocauc']
         test_result = result['test']['rocauc']
+
+        # wandb.log({'loss': epoch_loss, 'train': train_result, 'valid': valid_result, 'test': test_result})
 
         if valid_result > results['highest_valid']:
             results['highest_valid'] = valid_result
