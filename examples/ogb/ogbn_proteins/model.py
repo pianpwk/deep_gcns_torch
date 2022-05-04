@@ -132,6 +132,7 @@ class DeeperGCN(torch.nn.Module):
             h = F.relu(self.layer_norms[self.num_layers-1](h))
             h = F.dropout(h, p=self.dropout, training=self.training)
 
+            # return OUTPUTS + [self.node_pred_linear(h)]
             return self.node_pred_linear(h)
 
         elif self.block == 'res':
@@ -309,6 +310,8 @@ class DeeperGCNDP(torch.nn.Module):
 
         edge_emb = self.edge_encoder(edge_attr)
 
+        OUTPUTS = [node_features_1st, h, edge_emb]
+
         if self.block == 'res+':
             h = self.gcns[0](h, edge_index, edge_emb)
 
@@ -316,22 +319,29 @@ class DeeperGCNDP(torch.nn.Module):
                 for layer in range(1, self.num_layers):
                     h1 = self.layer_norms[layer-1](h)
                     h2 = F.relu(h1)
+                    torch.manual_seed(layer)
                     h2 = F.dropout(h2, p=self.dropout, training=self.training)
                     if layer % self.ckp_k != 0:
                         res = checkpoint(self.gcns[layer], h2, edge_index, edge_emb)
                         h = res + h
                     else:
                         h = self.gcns[layer](h2, edge_index, edge_emb) + h
+                    OUTPUTS.append(h)
 
             else:
                 for layer in range(1, self.num_layers):
                     h1 = self.layer_norms[layer-1](h)
                     h2 = F.relu(h1)
+                    torch.manual_seed(layer)
                     h2 = F.dropout(h2, p=self.dropout, training=self.training)
                     h = self.gcns[layer](h2, edge_index, edge_emb) + h
+                    OUTPUTS.append(h)
 
             h = F.relu(self.layer_norms[self.num_layers-1](h))
+            torch.manual_seed(self.num_layers)
             h = F.dropout(h, p=self.dropout, training=self.training)
+
+            # return OUTPUTS + [h, self.node_pred_linear(h)]
 
             return self.node_pred_linear(h)
 

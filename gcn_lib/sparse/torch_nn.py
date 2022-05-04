@@ -20,15 +20,24 @@ def act_layer(act_type, inplace=False, neg_slope=0.2, n_prelu=1):
     return layer
 
 
+class Identity(nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x):
+        return x
+
+
 def norm_layer(norm_type, nc):
     # normalization layer 1d
-    norm = norm_type.lower()
+    norm = norm_type.lower() if not norm_type is None else norm_type
     if norm == 'batch':
         layer = nn.BatchNorm1d(nc, affine=True)
     elif norm == 'layer':
         layer = nn.LayerNorm(nc, elementwise_affine=True)
     elif norm == 'instance':
         layer = nn.InstanceNorm1d(nc, affine=False)
+    elif norm is None:
+        layer = Identity()
     else:
         raise NotImplementedError('normalization layer [%s] is not found' % norm)
     return layer

@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 import statistics
 from dataset import OGBNDataset
-from model import DeeperGCN
+from model import DeeperGCNDP
 from args import ArgsInit
 import time
 import numpy as np
@@ -13,7 +13,8 @@ from ogb.nodeproppred import Evaluator
 from utils.ckpt_util import save_ckpt
 from utils.data_util import intersection, process_indexes
 import logging
-# import wandb
+import wandb
+import itertools
 
 from torch_geometric.nn import DataParallel
 from torch_geometric.data import Data
@@ -72,8 +73,18 @@ def train(data, dataset, model, optimizer, criterion, scheduler, num_gpus, devic
         # create training_idx, assuming cluster partitions are distinct
         all_nodes = np.concatenate([sg_nodes[idx] for idx in clusters], axis=0) # cat 4 lists in sorted order?
         mapper = {node: idx for idx, node in enumerate(all_nodes)} # duplicates? no: distinct partitions
-        inter_idx = intersection(all_nodes, dataset.train_idx.tolist()) # what happens to order here?
+        inter_idx = list(itertools.chain(*[intersection(sg_nodes[idx], dataset.train_idx.tolist()) for idx in clusters]))
         training_idx = [mapper[t_idx] for t_idx in inter_idx]
+
+        # create weights
+        indices = np.zeros(len(training_idx))
+        sizes = [len(intersection(sg_nodes[idx], dataset.train_idx.tolist())) for idx in clusters]
+        for i in range(len(sizes) - 1):
+            indices[sum(sizes[:i+1])] = 1
+        indices = np.cumsum(indices).astype(int)
+        weights = np.array(sizes)[indices]
+        weights = len(weights) / weights
+        weights = torch.tensor(weights).cuda()
 
         # step scheduler & zero out optimizer grads
         lr = scheduler.step()
@@ -86,6 +97,7 @@ def train(data, dataset, model, optimizer, criterion, scheduler, num_gpus, devic
         target = train_y[inter_idx].to(device)
 
         loss = criterion(pred[training_idx].to(torch.float32), target.to(torch.float32))
+        loss = (loss * weights.unsqueeze(1)).mean()
         loss.backward()
         nn.utils.clip_grad_value_(model.parameters(), 0.5)
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -186,7 +198,7 @@ def multi_evaluate(valid_data_list, dataset, model, evaluator, num_gpus, device)
 
 def main():
     args = ArgsInit().save_exp()
-    # wandb.init(project='deepgcn')
+    wandb.init(project='deepgcn')
 
     if args.use_gpu:
         device = torch.device("cuda:" + str(args.device)) if torch.cuda.is_available() else torch.device("cpu")
@@ -205,7 +217,7 @@ def main():
     logging.info('%s' % args)
 
     evaluator = Evaluator(args.dataset)
-    criterion = torch.nn.BCEWithLogitsLoss()
+    criterion = torch.nn.BCEWithLogitsLoss(reduction='none')
 
     valid_data_list = []
 
@@ -221,7 +233,7 @@ def main():
                                                             args.num_evals)
     logging.info(sub_dir)
 
-    model = DeeperGCN(args).to(device)
+    model = DeeperGCNDP(args).to(device)
     model = DataParallel(model).cuda()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = GradualScheduler(args.lr, int(args.warmup_ratio * args.cluster_number * args.epochs))
@@ -254,7 +266,7 @@ def main():
         valid_result = result['valid']['rocauc']
         test_result = result['test']['rocauc']
 
-        # wandb.log({'loss': epoch_loss, 'train': train_result, 'valid': valid_result, 'test': test_result})
+        wandb.log({'loss': epoch_loss, 'train': train_result, 'valid': valid_result, 'test': test_result})
 
         if valid_result > results['highest_valid']:
             results['highest_valid'] = valid_result
