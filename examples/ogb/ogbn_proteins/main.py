@@ -1,11 +1,9 @@
 import __init__
-import math
 import torch
-import torch.nn as nn
 import torch.optim as optim
 import statistics
 from dataset import OGBNDataset
-from model import DeeperGCNDP
+from model import DeeperGCN
 from args import ArgsInit
 import time
 import numpy as np
@@ -14,93 +12,67 @@ from utils.ckpt_util import save_ckpt
 from utils.data_util import intersection, process_indexes
 import logging
 import wandb
-import itertools
-
-from torch_geometric.nn import DataParallel
-from torch_geometric.data import Data
 
 
-class GradualScheduler:
-    '''
-    Increases lr from 0 -> <lr> across first <warmup_steps> steps, then maintains value of <lr>
-    '''
-    def __init__(self, lr, warmup_steps):
-        self.lr = lr
-        self.warmup_steps = warmup_steps
-        self.current_step = 0
-    def step(self):
-        self.current_step += 1
-        return self.lr * min(1.0, self.current_step / self.warmup_steps)
+def pad_for_data_parallel(xs, sg_nodes_idxs, sg_edges_s, sg_edges_attrs):
+    max_len_x = max([x.shape[0] for x in xs])
+    max_len_edges = max([x.shape[0] for x in sg_edges_attrs])
+    x, sg_nodes_idx, sg_edges_, sg_edges_attr = [], [], [], []
+    for x_ in xs:
+        if len(x_) < max_len_x:
+            x_ = torch.cat([x_, torch.zeros(max_len_x - len(x_), 8, device=x_.device)], dim=0)
+        x.append(x_)
+    for val in sg_nodes_idxs:
+        if len(val) < max_len_x:
+            val = torch.cat([val, torch.zeros(max_len_x - len(val), device=val.device, dtype=val.dtype)], dim=0)
+        sg_nodes_idx.append(val)
+    for val in sg_edges_s:
+        if val.size(1) < max_len_edges:
+            val = torch.cat([val, torch.zeros(2, max_len_edges - val.size(1), device=val.device, dtype=val.dtype)], dim=1)
+        sg_edges_s.append(val)
+    for val in sg_edges_attrs:
+        if len(val) < max_len_edges:
+            val = torch.cat([val, torch.zeros(max_len_edges - len(val), 8, device=val.device)], dim=0)
+        sg_edges_attr.append(val)
+    return torch.stack(x), torch.stack(sg_nodes_idx), torch.stack(sg_edges_), torch.stack(sg_edges_attr)
+    
 
-
-def pad_tensors(xs, node_indexs, edge_indexs, edge_attrs):
-    num_nodes, num_edges = [x.size(0) for x in xs], [x.size(0) for x in edge_attrs]
-    max_nodes, max_edges = max(num_nodes), max(num_edges)
-    xs = torch.stack([x if x.size(0) == max_nodes else torch.cat([x, torch.zeros(max_nodes - x.size(0), 8, device=xs[0].device)], dim=0) for x in xs], dim=0)
-    node_indexs = torch.stack([x if x.size(0) == max_nodes else torch.cat([x, torch.zeros(max_nodes - x.size(0), device=node_indexs[0].device).long()], dim=0) for x in node_indexs], dim=0) # not zero
-    edge_indexs = torch.stack([x if x.size(1) == max_edges else torch.cat([x, torch.zeros(2, max_edges - x.size(1), device=edge_indexs[0].device).long()], dim=1) for x in edge_indexs], dim=0) # not zero
-    edge_attrs = torch.stack([x if x.size(0) == max_edges else torch.cat([x, torch.zeros(max_edges - x.size(0), 8, device=edge_attrs[0].device)], dim=0) for x in edge_attrs], dim=0)
-    return xs, node_indexs, edge_indexs, edge_attrs, torch.LongTensor(num_nodes), torch.LongTensor(num_edges)
-
-
-def create_datalist(x, node_index, edge_index, edge_attr):
-    data_list = []
-    for i in range(len(x)):
-        data_list.append(Data(x=x[i], node_index=node_index[i], edge_index=edge_index[i], edge_attr=edge_attr[i]))
-    return data_list
-
-
-def train(data, dataset, model, optimizer, criterion, scheduler, num_gpus, device):
+def train(data, dataset, model, optimizer, criterion, device):
 
     loss_list = []
     model.train()
     sg_nodes, sg_edges, sg_edges_index, _ = data
 
     train_y = dataset.y[dataset.train_idx]
-    idx_clusters = list(np.arange(len(sg_nodes)))
+    idx_clusters = np.arange(len(sg_nodes))
     np.random.shuffle(idx_clusters)
-#     idx_clusters = list(idx_clusters) * 2
 
-    for i in range(int(math.ceil(len(idx_clusters) / float(num_gpus)))):
-        clusters = idx_clusters[i*num_gpus : (i+1)*num_gpus]
-        x = [dataset.x[sg_nodes[idx]].float() for idx in clusters]
-        sg_nodes_idx = [torch.LongTensor(sg_nodes[idx]) for idx in clusters]
-        sg_edges_ = [sg_edges[idx] for idx in clusters]
-        sg_edges_attr = [dataset.edge_attr[sg_edges_index[idx]] for idx in clusters]
+    for i, idx in enumerate(idx_clusters):
 
-        data_list = create_datalist(x, sg_nodes_idx, sg_edges_, sg_edges_attr)
+        x = dataset.x[sg_nodes[idx]].float().to(device)
+        sg_nodes_idx = torch.LongTensor(sg_nodes[idx]).to(device)
 
-        # create training_idx, assuming cluster partitions are distinct
-        all_nodes = np.concatenate([sg_nodes[idx] for idx in clusters], axis=0) # cat 4 lists in sorted order?
-        mapper = {node: idx for idx, node in enumerate(all_nodes)} # duplicates? no: distinct partitions
-        inter_idx = list(itertools.chain(*[intersection(sg_nodes[idx], dataset.train_idx.tolist()) for idx in clusters]))
+        sg_edges_ = sg_edges[idx].to(device)
+        sg_edges_attr = dataset.edge_attr[sg_edges_index[idx]].to(device)
+
+        print(x.shape, sg_edges_.shape, sg_edges_attr.shape, sg_nodes_idx.shape)
+
+        mapper = {node: idx for idx, node in enumerate(sg_nodes[idx])}
+
+        inter_idx = intersection(sg_nodes[idx], dataset.train_idx.tolist())
         training_idx = [mapper[t_idx] for t_idx in inter_idx]
 
-        # create weights
-        indices = np.zeros(len(training_idx))
-        sizes = [len(intersection(sg_nodes[idx], dataset.train_idx.tolist())) for idx in clusters]
-        for i in range(len(sizes) - 1):
-            indices[sum(sizes[:i+1])] = 1
-        indices = np.cumsum(indices).astype(int)
-        weights = np.array(sizes)[indices]
-        weights = len(weights) / weights
-        weights = torch.tensor(weights).cuda()
-
-        # step scheduler & zero out optimizer grads
-        lr = scheduler.step()
-        for g in optimizer.param_groups:
-            g['lr'] = lr
         optimizer.zero_grad()
 
-        pred = model(data_list)
+        st = time.time()
+        pred = model(x, sg_nodes_idx, sg_edges_, sg_edges_attr)
 
         target = train_y[inter_idx].to(device)
 
         loss = criterion(pred[training_idx].to(torch.float32), target.to(torch.float32))
-        loss = (loss * weights.unsqueeze(1)).mean()
+        st = time.time()
         loss.backward()
-        nn.utils.clip_grad_value_(model.parameters(), 0.5)
-        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
         optimizer.step()
         loss_list.append(loss.item())
 
@@ -108,7 +80,7 @@ def train(data, dataset, model, optimizer, criterion, scheduler, num_gpus, devic
 
 
 @torch.no_grad()
-def multi_evaluate(valid_data_list, dataset, model, evaluator, num_gpus, device):
+def multi_evaluate(valid_data_list, dataset, model, evaluator, device):
     model.eval()
     target = dataset.y.detach().numpy()
 
@@ -133,21 +105,15 @@ def multi_evaluate(valid_data_list, dataset, model, evaluator, num_gpus, device)
         train_target_idx = []
         valid_target_idx = []
 
-        for i in range(int(math.ceil(len(idx_clusters) / float(num_gpus)))):
-            clusters = idx_clusters[i*num_gpus : (i+1)*num_gpus]
-            x = [dataset.x[sg_nodes[idx]].float() for idx in clusters]
-            sg_nodes_idx = [torch.LongTensor(sg_nodes[idx]) for idx in clusters]
-            sg_edges_ = [sg_edges[idx] for idx in clusters]
-            sg_edges_attr = [dataset.edge_attr[sg_edges_index[idx]] for idx in clusters]
+        for idx in idx_clusters:
+            x = dataset.x[sg_nodes[idx]].float().to(device)
+            sg_nodes_idx = torch.LongTensor(sg_nodes[idx]).to(device)
 
-            data_list = create_datalist(x, sg_nodes_idx, sg_edges_, sg_edges_attr)
+            mapper = {node: idx for idx, node in enumerate(sg_nodes[idx])}
+            sg_edges_attr = dataset.edge_attr[sg_edges_index[idx]].to(device)
 
-            # create training_idx, assuming cluster partitions are distinct
-            all_nodes = np.concatenate([sg_nodes[idx] for idx in clusters], axis=0)
-            mapper = {node: idx for idx, node in enumerate(all_nodes)}
-
-            inter_tr_idx = intersection(all_nodes, train_idx)
-            inter_v_idx = intersection(all_nodes, valid_idx)
+            inter_tr_idx = intersection(sg_nodes[idx], train_idx)
+            inter_v_idx = intersection(sg_nodes[idx], valid_idx)
 
             train_target_idx += inter_tr_idx
             valid_target_idx += inter_v_idx
@@ -155,12 +121,12 @@ def multi_evaluate(valid_data_list, dataset, model, evaluator, num_gpus, device)
             tr_idx = [mapper[tr_idx] for tr_idx in inter_tr_idx]
             v_idx = [mapper[v_idx] for v_idx in inter_v_idx]
 
-            pred = model(data_list).cpu().detach()
+            pred = model(x, sg_nodes_idx, sg_edges[idx].to(device), sg_edges_attr).cpu().detach()
 
             train_predict.append(pred[tr_idx])
             valid_predict.append(pred[v_idx])
 
-            inter_te_idx = intersection(all_nodes, test_idx)
+            inter_te_idx = intersection(sg_nodes[idx], test_idx)
             test_target_idx += inter_te_idx
 
             te_idx = [mapper[te_idx] for te_idx in inter_te_idx]
@@ -198,7 +164,6 @@ def multi_evaluate(valid_data_list, dataset, model, evaluator, num_gpus, device)
 
 def main():
     args = ArgsInit().save_exp()
-    wandb.init(project='deepgcn')
 
     if args.use_gpu:
         device = torch.device("cuda:" + str(args.device)) if torch.cuda.is_available() else torch.device("cpu")
@@ -215,9 +180,10 @@ def main():
     args.nf_path = nf_path
 
     logging.info('%s' % args)
+    wandb.init(project='deepgcn', mode='disabled')
 
     evaluator = Evaluator(args.dataset)
-    criterion = torch.nn.BCEWithLogitsLoss(reduction='none')
+    criterion = torch.nn.BCEWithLogitsLoss()
 
     valid_data_list = []
 
@@ -233,10 +199,8 @@ def main():
                                                             args.num_evals)
     logging.info(sub_dir)
 
-    model = DeeperGCNDP(args).to(device)
-    model = DataParallel(model).cuda()
+    model = DeeperGCN(args).to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = GradualScheduler(args.lr, int(args.warmup_ratio * args.cluster_number * args.epochs))
 
     results = {'highest_valid': 0,
                'final_train': 0,
@@ -246,18 +210,20 @@ def main():
     start_time = time.time()
 
     loss_values, score_values = [], []
+ 
     for epoch in range(1, args.epochs + 1):
         # do random partition every epoch
         train_parts = dataset.random_partition_graph(dataset.total_no_of_nodes,
                                                      cluster_number=args.cluster_number)
         data = dataset.generate_sub_graphs(train_parts, cluster_number=args.cluster_number)
 
-        epoch_loss = train(data, dataset, model, optimizer, criterion, scheduler, args.num_gpus, device)
+        epoch_loss = train(data, dataset, model, optimizer, criterion, device)
         logging.info('Epoch {}, training loss {:.4f}'.format(epoch, epoch_loss))
 
-        model.module.print_params(epoch=epoch)
+        model.print_params(epoch=epoch)
 
-        result = multi_evaluate(valid_data_list, dataset, model, evaluator, args.num_gpus, device)
+        with torch.no_grad():
+            result = multi_evaluate(valid_data_list, dataset, model, evaluator, device)
 
         if epoch % 5 == 0:
             logging.info('%s' % result)
@@ -266,6 +232,8 @@ def main():
         valid_result = result['valid']['rocauc']
         test_result = result['test']['rocauc']
 
+        loss_values.append(epoch_loss)
+        score_values.append([train_result, valid_result, test_result])
         wandb.log({'loss': epoch_loss, 'train': train_result, 'valid': valid_result, 'test': test_result})
 
         if valid_result > results['highest_valid']:
@@ -281,19 +249,9 @@ def main():
         if train_result > results['highest_train']:
             results['highest_train'] = train_result
 
-        loss_values.append(epoch_loss)
-        score_values.append([result['train']['rocauc'], result['valid']['rocauc'], result['test']['rocauc']])
-
-        if epoch % 10 == 0:
+        if epoch % 10 == 0 and epoch > 0:
             np.save("loss_values.npy", loss_values)
             np.save("score_values.npy", score_values)
-
-        if epoch % 500 == 0 and epoch > 0:
-            torch.save("state_dict_epoch_{}.pth".format(epoch), {
-                'model': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'epoch': epoch
-            })
 
     logging.info("%s" % results)
 
