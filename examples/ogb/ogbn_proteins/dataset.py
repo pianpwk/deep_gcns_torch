@@ -10,6 +10,7 @@ import pickle
 import scipy.sparse as sp
 from torch_scatter import scatter
 import random
+import pymetis
 
 
 class OGBNDataset(object):
@@ -108,9 +109,37 @@ class OGBNDataset(object):
             print('Edges\' indexes information is saved into file {}'.format(file_name))
         return edge_index_dict
 
-    @staticmethod
-    def random_partition_graph(num_nodes, cluster_number=100):
-        parts = np.random.randint(cluster_number, size=num_nodes)
+
+    def make_adjacency_list(self, nodes, edges):
+        adjacency_list = []
+        _edges = []
+        E = edges.T
+        for i, edge in enumerate(E):
+            _edges.append(edge[1])
+            if i == len(E) - 1 or E[i + 1][0] != edge[0]:
+                adjacency_list.append(np.array(_edges))
+                # fill in gaps
+                next_node = len(nodes) - 1 if i == len(E) - 1 else E[i + 1][0]
+                for i in range(next_node - edge[0] - 1):
+                    adjacency_list.append(np.array([]))
+                _edges = []
+        return adjacency_list
+
+
+    def random_partition_graph(self, num_nodes, cluster_number=100):
+        # # RANDOM PARTITION
+        # parts = np.random.randint(cluster_number, size=num_nodes)
+
+        # METIS CLUSTERING
+        # for randomness, randomly partition into 2 subgraphs, then partition each subgraph into <cluster_number> / 2 further subgraphs
+        parts = np.zeros(shape=[num_nodes]).astype(int)
+        partition_1 = np.random.randint(2, size=num_nodes)
+        for i in range(2):
+            nodes_1 = np.where(partition_1 == i)[0]
+            edges_1 = tg.utils.from_scipy_sparse_matrix(self.adj[nodes_1][:, nodes_1])[0]
+            adj_list = self.make_adjacency_list(nodes_1, edges_1.numpy())
+            _, subparts = pymetis.part_graph(int(cluster_number / 2), adjacency=adj_list)
+            parts[nodes_1] = np.array(subparts) + int(i * int(cluster_number / 2))
         return parts
 
     
