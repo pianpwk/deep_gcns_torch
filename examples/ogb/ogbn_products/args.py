@@ -64,6 +64,9 @@ class ArgsInit(object):
         parser.add_argument('--model_load_path', type=str, default='ogbn_products_pretrained_model.pth',
                             help='the path of pre-trained model')
 
+        parser.add_argument('--metis', default=False, action='store_true')
+        parser.add_argument('--metis-subparts', type=int, default=None)
+
         self.args = parser.parse_args()
 
     def save_exp(self):
