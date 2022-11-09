@@ -2,8 +2,6 @@ import numpy as np
 import h5py
 import os
 import os.path as osp
-import scipy
-import scipy.sparse
 import shutil
 from glob import glob
 import torch
@@ -46,10 +44,10 @@ def random_partition_graph(num_nodes, cluster_number=10):
     parts = np.random.randint(cluster_number, size=num_nodes)
     return parts
 
+
 def generate_sub_graphs(adj, parts, cluster_number=10, batch_size=1):
     # convert sparse tensor to scipy csr
-    if not isinstance(adj, scipy.sparse.csr.csr_matrix):
-        adj = adj.to_scipy(layout='csr')
+    adj = adj.to_scipy(layout='csr')
 
     num_batches = cluster_number // batch_size
 

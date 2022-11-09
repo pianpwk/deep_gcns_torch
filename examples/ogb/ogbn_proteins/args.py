@@ -25,7 +25,6 @@ class ArgsInit(object):
                             help='the file path of extracted node features saved.')
         # training & eval settings
         parser.add_argument('--use_gpu', action='store_true')
-        parser.add_argument('--num-gpus', type=int, default=1)
         parser.add_argument('--device', type=int, default=0,
                             help='which gpu to use if any (default: 0)')
         parser.add_argument('--epochs', type=int, default=1000,
@@ -34,8 +33,6 @@ class ArgsInit(object):
                             help='The number of evaluation times')
         parser.add_argument('--lr', type=float, default=0.001,
                             help='learning rate set for optimizer.')
-        parser.add_argument('--warmup-ratio', type=float, default=0.1,
-                            help='learning rate warmup period')
         parser.add_argument('--dropout', type=float, default=0.0)
         # model
         parser.add_argument('--num_layers', type=int, default=3,
@@ -78,9 +75,6 @@ class ArgsInit(object):
         # load pre-trained model
         parser.add_argument('--model_load_path', type=str, default='ogbn_proteins_pretrained_model.pth',
                             help='the path of pre-trained model')
-                            
-        parser.add_argument('--metis', default=False, action='store_true')
-        parser.add_argument('--metis-subparts', type=int, default=None)
 
         self.args = parser.parse_args()
 
