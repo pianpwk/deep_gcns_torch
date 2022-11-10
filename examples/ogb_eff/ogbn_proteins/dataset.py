@@ -129,6 +129,7 @@ class OGBNDataset(object):
 
         for cluster in range(no_of_batches):
             sg_nodes[cluster] = np.where(parts == cluster)[0]
+            breakpoint()
             sg_edges[cluster] = tg.utils.from_scipy_sparse_matrix(self.adj[sg_nodes[cluster], :][:, sg_nodes[cluster]])[0]
             edges_no += sg_edges[cluster].shape[1]
             # mapper

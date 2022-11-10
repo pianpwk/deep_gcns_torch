@@ -85,6 +85,8 @@ class ArgsInit(object):
         parser.add_argument('--inject_input', action='store_true')
         parser.add_argument('--pretrain_epochs', type=int, default=100,
                             help='number of epochs to pretrain (default: 100)')
+        # drop edge
+        parser.add_argument('--drop-edge', type=float, default=None, help='Percentage of edges to drop, after graph partitioning')
 
         self.args = parser.parse_args()
 

@@ -166,6 +166,9 @@ def main():
     valid_data_list = []
 
     for i in range(args.num_evals):
+        '''
+        Modify parts & valid_data with drop edge (if used)
+        '''
         parts = dataset.random_partition_graph(dataset.total_no_of_nodes,
                                                cluster_number=args.valid_cluster_number)
         valid_data = dataset.generate_sub_graphs(parts,
@@ -178,12 +181,7 @@ def main():
     logging.info(sub_dir)
 
     if args.backbone == 'deepergcn':
-        # model = DeeperGCN(args).to(device)
         pass
-    # elif args.backbone == 'deq':
-        # model = DEQGCN(args).to(device)
-    # elif args.backbone == 'revwt':
-        # model = WTRevGCN(args).to(device)
     elif args.backbone == 'rev':
         model = RevGCN(args).to(device)
     else:
@@ -201,10 +199,13 @@ def main():
     start_time = time.time()
 
     for epoch in range(1, args.epochs + 1):
+        '''
+        modify train_parts and data with drop edge
+        '''
         # do random partition every epoch
         train_parts = dataset.random_partition_graph(dataset.total_no_of_nodes,
                                                      cluster_number=args.cluster_number)
-        data = dataset.generate_sub_graphs(train_parts, cluster_number=args.cluster_number)
+        data = dataset.generate_sub_graphs(train_parts, cluster_number=args.cluster_number, drop_edge=args.drop_edge)
 
         epoch_loss = train(data, dataset, model, optimizer,
                            criterion, device, epoch=epoch)
